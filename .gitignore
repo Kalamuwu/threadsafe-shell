@@ -1,0 +1,5 @@
+/bin
+/build_and_push.sh
+/build_and_push_to_test.sh
+/lib
+/pyvenv.cfg
