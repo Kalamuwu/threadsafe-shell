@@ -2,6 +2,7 @@ import sys
 import readline # adds up/down arrow support in shell
 import threading
 from queue import deque
+import io
 
 class Shell:
     class colors:
@@ -27,10 +28,14 @@ class Shell:
         RESET  = "\033[0m"
     
     
-    def __init__(self, log_file=None, error_file=None, debug_level=3):
-        # io
+    def __init__(self, log_file:io.IOBase=None, error_file:io.IOBase=None, debug_level=3):
+        # stream and file io
         self.__log_file = log_file
+        self.__write_to_log_file = log_file is not None
         self.__error_file = error_file
+        self.__write_to_error_file = error_file is not None
+        self.write_to_console = False
+        # debug info
         self.DEBUG_LEVEL = debug_level
         self.__is_debug_active = True
         # threading
@@ -39,34 +44,38 @@ class Shell:
         self.__queue_lock = threading.Lock()
         self.__file_lock = threading.Lock()
         self.__input_lock = threading.Lock()
+    
+    def set_log_output_file(self, file: io.IOBase):
+        self.__log_file = file
+        self.__write_to_log_file = file is not None
+    
+    def set_error_output_file(self, file: io.IOBase):
+        self.__error_file = file
+        self.__write_to_error_file = file is not None
 
     
     def __handle_to_file(self, data:dict={}) -> None:
         if "text" not in data: raise KeyError("Key 'text' not found")
         if "is_error" not in data: raise KeyError("Key 'is_error' not found")
-        if "only" not in data: raise KeyError("Key 'only' not found")
         with self.__file_lock:
             # print to console
-            if data["only"] != "file":
+            if self.write_to_console:
                 print(data["text"], end='', flush=True, file=sys.stderr if data["is_error"] else sys.stdout)
             # print to file
-            if data["only"] != "console":
-                file = self.__error_file if data["is_error"] else self.__log_file
-                if not (self.__log_file is None):
-                    print(data["text"], end='', flush=True, file=self.__log_file)
-                if data["is_error"] and not (self.__error_file is None):
-                    print(data["text"], end='', flush=True, file=self.__error_file)
+            if self.__write_to_log_file:
+                print(data["text"], end='', flush=True, file=self.__log_file)
+            if self.__write_to_error_file and data["is_error"]:
+                print(data["text"], end='', flush=True, file=self.__error_file)
 
-    def __add_to_queue(self, header:str, *args, is_error:bool=False, console_only:bool=False, file_only:bool=False, end='\n', sep=' ') -> None:
-        if console_only and file_only: raise AttributeError("console_only and file_only cannot both be True")
+
+    def __add_to_queue(self, header:str, *args, is_error:bool=False, end='\n', sep=' ') -> None:
         header += "\033[0m"
         end += "\033[0m"
         out = header + sep.join(str(arg) for arg in args) + end
         out.replace('\n', '\n'+header)
-        only = "console" if console_only else "file" if file_only else None
         with self.__queue_lock:
-            self.__queue.append({ "text": out, "is_error": is_error, "only": only })
-     
+            self.__queue.append({ "text": out, "is_error": is_error })
+    
     def __write_loop(self):
         while True:
             if len(self.__queue):
@@ -108,12 +117,12 @@ class Shell:
         """
         string += "\033[35mPROMPT "+string+"\033[0m "
         with self.__input_lock:
-            self.__add_to_queue("\033[35mPROMPT ", string, end='', console_only=True)
+            self.__add_to_queue("\033[35mPROMPT ", string, end='')
             val = input().strip()
             while default is None and len(val) == 0:
-                self.__add_to_queue("\033[35mPROMPT ", string, end='', console_only=True)
+                self.__add_to_queue("\033[35mPROMPT ", string, end='')
                 val = input().strip()
-        if not (self.__log_file is None): self.__add_to_queue("\033[35mPROMPT ", string, val, file_only=True, sep='')
+        if not (self.__log_file is None): self.__add_to_queue("\033[35mPROMPT ", string, val, sep='')
         return default if val=="" else val
 
 
@@ -127,16 +136,16 @@ class Shell:
             string += " (y|n)  "
             with self.__input_lock:
                 while len(val)==0 or not (val[0] in "ynYN"):
-                    self.__add_to_queue("\033[35mPROMPT ", string, end='', console_only=True)
+                    self.__add_to_queue("\033[35mPROMPT ", string, end='')
                     val = input().strip()
-            if not (self.__log_file is None): self.__add_to_queue("\033[35mPROMPT ", string, val, file_only=True, sep='')
+            if not (self.__log_file is None): self.__add_to_queue("\033[35mPROMPT ", string, val, sep='')
             return val[0].lower() == "y"
         else:
             string += f" ({'Y|n' if default else 'y|N'})  "
             with self.__input_lock:
-                self.__add_to_queue("\033[35mPROMPT ", string, end='', console_only=True)
+                self.__add_to_queue("\033[35mPROMPT ", string, end='')
                 val = input().strip()
-            if not (self.__log_file is None): self.__add_to_queue("\033[35mPROMPT ", string, val, file_only=True, sep='')
+            if not (self.__log_file is None): self.__add_to_queue("\033[35mPROMPT ", string, val, sep='')
             if len(val)==0 or val[0] not in "ynYN":
                 val = "y" if default else "n"
             if default: return val[0].lower() != "n"
